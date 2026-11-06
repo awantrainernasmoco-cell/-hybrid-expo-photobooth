@@ -45,21 +45,24 @@ header small{font-size:11px;letter-spacing:.14em;font-weight:700;color:#d7f0ff}h
   <button class="gold" id="saveBtn" disabled>Simpan Foto</button>
  </div>
  <div id="status" role="status">Menunggu frame siap...</div>
- <footer>Foto diproses di perangkat Anda, tidak dikirim ke server. Gunakan Chrome atau Safari terbaru dan izinkan akses kamera.</footer>
+ <footer>Dengan menekan <strong>Simpan Foto</strong>, Anda menyetujui pengiriman salinan foto ke Google Drive panitia Toyota Hybrid Expo untuk dokumentasi internal. Foto juga diunduh ke perangkat Anda. Mohon hanya memotret orang yang telah menyetujui dokumentasi.</footer>
  <canvas id="canvas" hidden></canvas>
 </main>
 <script>
 (()=>{
 'use strict';
+// Isi dengan URL /exec Web App Google Apps Script yang memiliki fungsi doPost().
+// URL ini bersifat publik; jangan memasukkan password atau secret dalam kode GitHub.
+const UPLOAD_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbx0ogvW3oQVPDDTddyVAYLGlxnG8LabOUqREnTpY_Y1aG1IzqRlp5FTBw5Wnxlo1eAP/exec';
 const el=id=>document.getElementById(id);
 const video=el('video'),photo=el('photo'),frame=el('frame'),result=el('result'),canvas=el('canvas');
 const cameraBtn=el('cameraBtn'),flipBtn=el('flipBtn'),captureBtn=el('captureBtn'),retryBtn=el('retryBtn'),saveBtn=el('saveBtn');
 const placeholder=el('placeholder'),loader=el('loader'),status=el('status'),upload=el('upload'),stage=el('stage'),fitMode=el('fitMode');
-let stream=null,facing='user',mode='idle',frameReady=false,photoUrl='',resultUrl='',mirrored=false;
+let stream=null,facing='user',mode='idle',frameReady=false,photoUrl='',resultUrl='',mirrored=false,uploading=false;
 const setStatus=t=>{status.textContent=t};
 function applyFit(){const contain=fitMode.value==='contain';video.style.objectFit=contain?'contain':'cover';photo.style.objectFit=contain?'contain':'cover';}
 fitMode.addEventListener('change',()=>{applyFit();if(mode==='result'){clearResult();mode=photoUrl?'picked':'idle';show(mode);controls();setStatus('Komposisi diubah. Silakan buat foto ulang.');}});
-function controls(){flipBtn.disabled=mode!=='camera';captureBtn.disabled=!frameReady||!(mode==='camera'||mode==='picked');captureBtn.textContent=mode==='picked'?'Buat Foto dengan Frame':'Ambil Foto';retryBtn.disabled=mode==='idle';saveBtn.disabled=mode!=='result'||!resultUrl;}
+function controls(){flipBtn.disabled=mode!=='camera';captureBtn.disabled=!frameReady||!(mode==='camera'||mode==='picked');captureBtn.textContent=mode==='picked'?'Buat Foto dengan Frame':'Ambil Foto';retryBtn.disabled=mode==='idle';saveBtn.disabled=mode!=='result'||!resultUrl||uploading;}
 function stopCamera(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}video.pause();video.srcObject=null;}
 function clearResult(){if(resultUrl){URL.revokeObjectURL(resultUrl);resultUrl='';}result.removeAttribute('src');result.style.display='none';}
 function show(which){placeholder.style.display=which==='idle'?'grid':'none';video.style.display=which==='camera'?'block':'none';photo.style.display=which==='picked'?'block':'none';result.style.display=which==='result'?'block':'none';}
@@ -109,7 +112,37 @@ captureBtn.onclick=()=>{
  }catch(err){setStatus('Gagal memproses foto: '+err.message);}
 };
 retryBtn.onclick=()=>{clearResult();if(photoUrl){mode='picked';applyFit();show('picked');controls();setStatus('Klik Buat Foto dengan Frame, atau pilih foto baru.');}else{mode='idle';show('idle');controls();setStatus('Klik Buka Kamera untuk mengambil foto lagi.');}};
-saveBtn.onclick=()=>{if(!resultUrl)return;const a=document.createElement('a');a.href=resultUrl;a.download='Hybrid-Expo-Nasmoco-'+Date.now()+'.png';document.body.appendChild(a);a.click();a.remove();setStatus('Foto sedang disimpan. Jika unduhan tidak muncul, tahan gambar hasil foto lalu pilih Simpan Gambar.');};
+async function sendToDrive(blob){
+ // Browser tidak boleh membaca respons Google Apps Script lintas domain.
+ // mode:no-cors dapat mengirim POST, tetapi tidak memberikan tanda bukti upload.
+ const encoded = await new Promise((resolve,reject)=>{
+  const reader=new FileReader();
+  reader.onload=()=>resolve(String(reader.result).split(',')[1]);
+  reader.onerror=()=>reject(new Error('Gagal membaca PNG'));
+  reader.readAsDataURL(blob);
+ });
+ const params=new URLSearchParams();
+ params.set('image',encoded);
+ await fetch(UPLOAD_WEBAPP_URL,{method:'POST',mode:'no-cors',body:params,redirect:'follow'});
+}
+saveBtn.onclick=async()=>{
+ if(!resultUrl||uploading)return;
+ // Langsung mulai unduh dalam event klik agar browser seluler tidak memblokirnya.
+ const a=document.createElement('a');a.href=resultUrl;a.download='Hybrid-Expo-Nasmoco-'+Date.now()+'.png';
+ document.body.appendChild(a);a.click();a.remove();
+ if(UPLOAD_WEBAPP_URL.startsWith('ISI_URL_')){
+  setStatus('Foto diunduh. Pengiriman otomatis ke Drive belum aktif: isi URL Web App pada index.html.');return;
+ }
+ uploading=true;controls();setStatus('Foto diunduh. Sedang mengirim salinan ke dokumentasi panitia...');
+ try{
+  const blob=await (await fetch(resultUrl)).blob();
+  if(blob.size>6*1024*1024)throw new Error('Ukuran foto lebih dari 6 MB');
+  await sendToDrive(blob);
+  setStatus('Foto diunduh. Permintaan pengiriman ke Google Drive telah dikirim; cek folder panitia untuk memastikan foto masuk.');
+ }catch(err){
+  setStatus('Foto tetap diunduh, tetapi pengiriman ke Drive gagal: '+err.message+'. Coba klik Simpan Foto lagi saat koneksi stabil.');
+ }finally{uploading=false;controls();}
+};
 frame.onload=()=>{frameReady=true;stage.style.aspectRatio=frame.naturalWidth+' / '+frame.naturalHeight;loader.style.display='none';applyFit();controls();setStatus('Frame landscape siap ('+frame.naturalWidth+' × '+frame.naturalHeight+'). Klik Buka Kamera.');};
 frame.onerror=()=>{loader.style.display='none';setStatus('Frame gagal dimuat. Pastikan file frame.png diunggah bersama index.html pada folder utama repository.');};
 if(frame.complete&&frame.naturalWidth){frame.onload();}
