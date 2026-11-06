@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#073a86">
+<title>Toyota Hybrid Expo | Photo Booth Nasmoco</title>
+<style>
+:root{--navy:#05275e;--blue:#0674d7;--yellow:#ffcf2d}*{box-sizing:border-box}
+body{margin:0;min-height:100dvh;font-family:Arial,Helvetica,sans-serif;color:white;background:linear-gradient(155deg,#051c4d,#0b63ad 58%,#b1ddf9)}
+main{max-width:540px;margin:0 auto;padding:18px 14px 44px}header{text-align:center;padding:6px 0 15px}
+header small{font-size:11px;letter-spacing:.14em;font-weight:700;color:#d7f0ff}h1{font-size:clamp(25px,6.8vw,37px);letter-spacing:-.035em;margin:8px 0 3px}h1 span{color:var(--yellow)}header p{font-size:13px;color:#dbefff;margin:7px 0 0}
+.stage{position:relative;width:100%;aspect-ratio:1122/1402;background:#bfe6f9;border-radius:16px;overflow:hidden;box-shadow:0 14px 35px #00174180;isolation:isolate}
+.stage video,.stage img,.stage canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+#video{display:none}#photo{display:none}#result{display:none}#video.mirror{transform:scaleX(-1)}
+#frame{z-index:5;object-fit:fill;pointer-events:none}#result{z-index:6}
+#placeholder{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:#092a66;font-weight:700;padding:22% 19%;line-height:1.5;background:radial-gradient(circle,#a6d8f2,#dbf0fb)}
+#loader{position:absolute;z-index:7;bottom:10px;left:10px;right:10px;text-align:center;padding:10px;border-radius:8px;font-size:12px;background:#082a6de8}
+.controls{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}button,.file-label{min-height:49px;border:0;border-radius:11px;padding:12px;font:800 14px Arial;display:flex;align-items:center;justify-content:center;text-align:center;cursor:pointer}.wide{grid-column:1/-1}.light{background:#fff;color:#06356e}.blue{background:#095ba8;color:#fff;border:1px solid #97d5ff}.gold{background:var(--yellow);color:#092b62}button:disabled{opacity:.46;cursor:not-allowed}
+input[type=file]{display:none}#status{margin-top:12px;background:#04285cbf;border-radius:10px;padding:12px;font-size:13px;line-height:1.5;min-height:42px}footer{text-align:center;color:#d0e9ff;font-size:11px;line-height:1.6;margin-top:13px}
+</style>
+</head>
+<body>
+<main>
+ <header><small>NASMOCO LEARNING CENTER</small><h1>TOYOTA <span>HYBRID EXPO</span></h1><p>Foto langsung dengan frame Hybrid Expo</p></header>
+ <div class="stage" id="stage" aria-label="Pratinjau kamera dengan frame Hybrid Expo">
+  <div id="placeholder">Buka kamera atau pilih foto dari galeri</div>
+  <video id="video" autoplay playsinline muted></video>
+  <img id="photo" alt="Foto dipilih">
+  <img id="frame" src="frame.png" alt="Frame Toyota Hybrid Expo">
+  <img id="result" alt="Hasil foto Hybrid Expo">
+  <div id="loader">Memuat frame...</div>
+ </div>
+ <div class="controls">
+  <button class="light" id="cameraBtn">Buka Kamera</button>
+  <button class="light" id="flipBtn" disabled>Ganti Kamera</button>
+  <label class="file-label blue wide" for="upload">Pilih Foto dari Galeri</label>
+  <input id="upload" type="file" accept="image/*">
+  <button class="gold wide" id="captureBtn" disabled>Ambil Foto</button>
+  <button class="blue" id="retryBtn" disabled>Ulangi</button>
+  <button class="gold" id="saveBtn" disabled>Simpan Foto</button>
+ </div>
+ <div id="status" role="status">Menunggu frame siap...</div>
+ <footer>Foto diproses di perangkat Anda, tidak dikirim ke server. Gunakan Chrome atau Safari terbaru dan izinkan akses kamera.</footer>
+ <canvas id="canvas" hidden></canvas>
+</main>
+<script>
+(()=>{
+'use strict';
+const el=id=>document.getElementById(id);
+const video=el('video'),photo=el('photo'),frame=el('frame'),result=el('result'),canvas=el('canvas');
+const cameraBtn=el('cameraBtn'),flipBtn=el('flipBtn'),captureBtn=el('captureBtn'),retryBtn=el('retryBtn'),saveBtn=el('saveBtn');
+const placeholder=el('placeholder'),loader=el('loader'),status=el('status'),upload=el('upload');
+let stream=null,facing='user',mode='idle',frameReady=false,photoUrl='',resultUrl='',mirrored=false;
+const setStatus=t=>{status.textContent=t};
+function controls(){flipBtn.disabled=mode!=='camera';captureBtn.disabled=!frameReady||!(mode==='camera'||mode==='picked');captureBtn.textContent=mode==='picked'?'Buat Foto dengan Frame':'Ambil Foto';retryBtn.disabled=mode==='idle';saveBtn.disabled=mode!=='result'||!resultUrl;}
+function stopCamera(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}video.pause();video.srcObject=null;}
+function clearResult(){if(resultUrl){URL.revokeObjectURL(resultUrl);resultUrl='';}result.removeAttribute('src');result.style.display='none';}
+function show(which){placeholder.style.display=which==='idle'?'grid':'none';video.style.display=which==='camera'?'block':'none';photo.style.display=which==='picked'?'block':'none';result.style.display=which==='result'?'block':'none';}
+function cover(ctx,img,w,h,flip=false){const sw=img.videoWidth||img.naturalWidth,sh=img.videoHeight||img.naturalHeight;if(!sw||!sh)throw Error('Gambar belum siap.');const scale=Math.max(w/sw,h/sh),dw=sw*scale,dh=sh*scale;ctx.save();if(flip){ctx.translate(w,0);ctx.scale(-1,1);}ctx.drawImage(img,(w-dw)/2,(h-dh)/2,dw,dh);ctx.restore();}
+async function startCamera(){
+ if(!frameReady){setStatus('Frame belum siap.');return;}
+ stopCamera();clearResult();
+ if(!navigator.mediaDevices?.getUserMedia){setStatus('Browser tidak mendukung kamera langsung. Buka website HTTPS di Chrome/Safari.');return;}
+ try{
+  setStatus('Meminta izin kamera...');
+  const constraints={audio:false,video:{facingMode:{ideal:facing},width:{ideal:1280},height:{ideal:1600}}};
+  stream=await navigator.mediaDevices.getUserMedia(constraints);
+  video.srcObject=stream;await video.play();
+  mirrored=facing==='user';video.classList.toggle('mirror',mirrored);
+  mode='camera';show('camera');controls();setStatus('Kamera aktif. Atur posisi wajah di tengah bingkai lalu klik Ambil Foto.');
+ }catch(err){mode='idle';show('idle');controls();setStatus('Kamera belum bisa dibuka ('+(err.name||'Error')+'). Izinkan kamera di pengaturan browser, atau gunakan foto dari galeri.');}
+}
+cameraBtn.onclick=()=>startCamera();
+flipBtn.onclick=()=>{facing=facing==='user'?'environment':'user';startCamera();};
+upload.onchange=()=>{
+ const file=upload.files&&upload.files[0];if(!file)return;if(!file.type.startsWith('image/')){setStatus('Pilih file gambar yang valid.');return;}
+ stopCamera();clearResult();if(photoUrl)URL.revokeObjectURL(photoUrl);photoUrl=URL.createObjectURL(file);
+ photo.onload=()=>{mode='picked';show('picked');controls();setStatus('Foto galeri siap. Klik Buat Foto dengan Frame.');};
+ photo.onerror=()=>{setStatus('Gambar tidak dapat dibaca. Pilih gambar lain.');};
+ photo.src=photoUrl;
+};
+captureBtn.onclick=()=>{
+ if(!frameReady)return;
+ try{
+  const W=frame.naturalWidth,H=frame.naturalHeight;canvas.width=W;canvas.height=H;
+  const ctx=canvas.getContext('2d');ctx.clearRect(0,0,W,H);
+  if(mode==='camera')cover(ctx,video,W,H,mirrored);else if(mode==='picked')cover(ctx,photo,W,H,false);else return;
+  ctx.drawImage(frame,0,0,W,H);
+  canvas.toBlob(blob=>{if(!blob){setStatus('Gagal membuat PNG. Coba ulang.');return;}clearResult();resultUrl=URL.createObjectURL(blob);result.src=resultUrl;mode='result';stopCamera();show('result');controls();setStatus('Foto berhasil dibuat! Klik Simpan Foto untuk mengunduh PNG.');},'image/png');
+ }catch(err){setStatus('Gagal memproses foto: '+err.message);}
+};
+retryBtn.onclick=()=>{clearResult();if(photoUrl){mode='picked';show('picked');controls();setStatus('Klik Buat Foto dengan Frame, atau pilih foto baru.');}else{mode='idle';show('idle');controls();setStatus('Klik Buka Kamera untuk mengambil foto lagi.');}};
+saveBtn.onclick=()=>{if(!resultUrl)return;const a=document.createElement('a');a.href=resultUrl;a.download='Hybrid-Expo-Nasmoco-'+Date.now()+'.png';document.body.appendChild(a);a.click();a.remove();setStatus('Foto sedang disimpan. Jika unduhan tidak muncul, tahan gambar hasil foto lalu pilih Simpan Gambar.');};
+frame.onload=()=>{frameReady=true;loader.style.display='none';controls();setStatus('Frame siap! Klik Buka Kamera untuk mulai foto.');};
+frame.onerror=()=>{loader.style.display='none';setStatus('Frame gagal dimuat. Pastikan file frame.png diunggah bersama index.html pada folder utama repository.');};
+if(frame.complete&&frame.naturalWidth){frame.onload();}
+show('idle');controls();window.addEventListener('pagehide',stopCamera);
+})();
+</script>
+</body>
+</html>
